@@ -17,10 +17,6 @@ import (
 
 
 
-const vethIface = "veth1"
-
-
-
 func main() {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
