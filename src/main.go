@@ -23,15 +23,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+
+
+
 	loadBalancerType := os.Getenv("LOAD_BALANCER_TYPE")
 	fmt.Println("Load Balancer Type: ", loadBalancerType)
 	switch loadBalancerType {
 	case "Sticky_RR_v1":
 		runLoadBalancerV1()
-	case "Sticky_RR_v2":
-		runLoadBalancerV2()
-	case "Sticky_RR_v3":
-		runLoadBalancerV3()
+	// case "Sticky_RR_v2":
+	// 	runLoadBalancerV2()
+	// case "Sticky_RR_v3":
+	// 	runLoadBalancerV3()
 	default:
 		log.Fatalf("unknown load balancer type: %s", loadBalancerType)
 	}
@@ -76,27 +79,27 @@ func readEBPFMap(done chan struct{}) {
 }
 
 func runLoadBalancerV1() {
-	objs := lb_sticky_rr_v1Objects{}
-	if err := loadLb_sticky_rr_v1Objects(&objs, nil); err != nil {
+	objs := lb_v1Objects{}
+	if err := loadLb_v1Objects(&objs, nil); err != nil {
 		log.Fatalf("loading lb_sticky_rr_v1 objects: %v", err)
 	}
 
 	fmt.Println("Sticky Round Robin Load Balancer V1 started")
 }
 
-func runLoadBalancerV2() {
-	objs := lb_sticky_rr_v2Objects{}
-	if err := loadLb_sticky_rr_v1Objects(&objs, nil); err != nil {
-		log.Fatalf("loading lb_lb_sticky_rr_v2 objects: %v", err)
-	}
+// func runLoadBalancerV2() {
+// 	objs := lb_sticky_rr_v2Objects{}
+// 	if err := loadLb_sticky_rr_v1Objects(&objs, nil); err != nil {
+// 		log.Fatalf("loading lb_lb_sticky_rr_v2 objects: %v", err)
+// 	}
 
-	fmt.Println("Sticky Round Robin Load Balancer V2 started")
-}
+// 	fmt.Println("Sticky Round Robin Load Balancer V2 started")
+// }
 
-func runLoadBalancerV3() {
-	objs := lb_sticky_rr_v3Objects{}
-	if err := loadLb_sticky_rr_v3Objects(&objs, nil); err != nil {
-		log.Fatalf("loading lb_lb_sticky_rr_v3 objects: %v", err)
-	}
-	fmt.Println("Sticky Round Robin Load Balancer V3 started")
-}
+// func runLoadBalancerV3() {
+// 	objs := lb_sticky_rr_v3Objects{}
+// 	if err := loadLb_sticky_rr_v3Objects(&objs, nil); err != nil {
+// 		log.Fatalf("loading lb_lb_sticky_rr_v3 objects: %v", err)
+// 	}
+// 	fmt.Println("Sticky Round Robin Load Balancer V3 started")
+// }

@@ -15,10 +15,10 @@
 #define IPPROTO_UDP 17
 
 #ifndef DEBUG
-#define DEBUG 0
+#define DEBUG 1
 #endif
 
-volatile __u32 num_backends = 4;
+#define MAX_BACKENDS 3
 
 struct flow_key {
     __be32 src_ip;
@@ -29,6 +29,13 @@ struct flow_key {
 } __attribute__((packed));
 
 struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u32);  // Backend ifindex
+    __uint(max_entries, MAX_BACKENDS);
+} backend_map SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32); // hash of flow_key
     __type(value, __u32); // ifindex
@@ -36,8 +43,9 @@ struct {
 } flow_map SEC(".maps");
 
 
-// global var that indicates next ifindex to be used
-__u32 volatile next_ifindex = 0;
+// This is a global variable to keep track of the next backend index
+// that will be used for round-robin load balancing
+__u32 volatile idx = 0;
 
 
 // implement jhash for flow_key
@@ -57,7 +65,7 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
 
     if ((void *)(eth + 1) > data_end)
         return TC_ACT_SHOT;
-    if (eth->h_proto != bpf_htons(ETH_P_IP) || eth->h_proto != bpf_htons(ETH_P_IPV6))
+    if (eth->h_proto != bpf_htons(ETH_P_IP) && eth->h_proto != bpf_htons(ETH_P_IPV6))
         return TC_ACT_SHOT;
 
 #if DEBUG
@@ -104,20 +112,23 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
     if (!ifindex) {
         // save the next ifindex to be used
         int res;
+        __u32 *next_ifindex = bpf_map_lookup_elem(&backend_map, &idx);
+        if (!next_ifindex) {
+            bpf_printk("next_ifindex is NULL\n");
+            return TC_ACT_SHOT;
+        }
+        idx = (idx + 1) % MAX_BACKENDS;
         res = bpf_map_update_elem(&flow_map, &hash, &next_ifindex, BPF_ANY);
         if (res != 0) {
             return TC_ACT_SHOT;
         }
-        //bpf_redirect to the index
-        __u32 old_ifindex = next_ifindex;
+  
 #if DEBUG
-        bpf_printk("the new flow is being attached to ifindex : %u\n", old_ifindex);
+        bpf_printk("the new flow is being attached to ifindex : %u\n", next_ifindex);
+
+        bpf_printk("redirecting to ifindex: %u\n", next_ifindex);
 #endif
-        next_ifindex = (next_ifindex + 1) % num_backends;
-#if DEBUG
-        bpf_printk("redirecting to ifindex: %u\n", *old_ifindex);
-#endif
-        return bpf_redirect(old_ifindex, 0);
+        return bpf_redirect(*next_ifindex, 0);
     } 
 #if DEBUG
     bpf_printk("redirecting to ifindex: %u\n", *ifindex);
