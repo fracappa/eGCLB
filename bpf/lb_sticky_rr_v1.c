@@ -3,21 +3,19 @@
 #include <linux/pkt_cls.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
+#include <linux/in.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+// #include <linux/jhash.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_tracing.h>
-
-#define ETH_P_IP6 0x86DD    
-#define IPPROTO_ICMP 1
-#define IPPROTO_TCP 6
-#define IPPROTO_UDP 17
 
 #ifndef DEBUG
 #define DEBUG 1
 #endif
 
+#define JHASH_INITVAL		0xdeadbeef
 #define MAX_BACKENDS 3
 
 struct flow_key {
@@ -29,29 +27,71 @@ struct flow_key {
 } __attribute__((packed));
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, __u32);  // Backend ifindex
-    __uint(max_entries, MAX_BACKENDS);
-} backend_map SEC(".maps");
-
-struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32); // hash of flow_key
-    __type(value, __u32); // ifindex
+    __type(value, __u32); // destination IP
     __uint(max_entries, 10240);
 } flow_map SEC(".maps");
 
 
-// This is a global variable to keep track of the next backend index
-// that will be used for round-robin load balancing
-__u32 volatile idx = 0;
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32); // incremental index {0,1,2,...,n}
+    __type(value, __u32); // destination IP
+    __uint(max_entries, 10240);
+} backends SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __type(key, __u32); 
+    __type(value, __u32); 
+    __uint(max_entries, 1);
+} num_backends SEC(".maps");
 
 
-// implement jhash for flow_key
-static __always_inline __u32 jhash(const void *key, __u32 length, __u32 initval) {
-    return 0;
+static __always_inline __u32 rol32(__u32 word, __u32 shift) {
+    return (word << shift) | (word >> (32 - shift));
 }
+
+static __always_inline void jhash_mix(__u32 *a, __u32 *b, __u32 *c) {
+    *a -= *c;  *a ^= rol32(*c, 4);  *c += *b;
+    *b -= *a;  *b ^= rol32(*a, 6);  *a += *c;
+    *c -= *b;  *c ^= rol32(*b, 8);  *b += *a;
+    *a -= *c;  *a ^= rol32(*c,16);  *c += *b;
+    *b -= *a;  *b ^= rol32(*a,19);  *a += *c;
+    *c -= *b;  *c ^= rol32(*b, 4);  *b += *a;
+}
+
+static __always_inline __u32 jhash(const void *key, __u32 len, __u32 initval) {
+    const __u8 *k = key;
+    __u32 a, b, c;
+    a = b = c = 0xdeadbeef + len + initval;
+
+    __u32 k0 = 0, k1 = 0, k2 = 0;
+
+    if (len > 0) k0 |= k[0];
+    if (len > 1) k0 |= k[1] << 8;
+    if (len > 2) k0 |= k[2] << 16;
+    if (len > 3) k0 |= k[3] << 24;
+    if (len > 4) k1 |= k[4];
+    if (len > 5) k1 |= k[5] << 8;
+    if (len > 6) k1 |= k[6] << 16;
+    if (len > 7) k1 |= k[7] << 24;
+    if (len > 8) k2 |= k[8];
+    if (len > 9) k2 |= k[9] << 8;
+    if (len > 10) k2 |= k[10] << 16;
+    if (len > 11) k2 |= k[11] << 24;
+
+    a += k0;
+    b += k1;
+    c += k2;
+
+    jhash_mix(&a, &b, &c);
+
+    return c;
+}
+
+__u32 current_backend_index;
 
 SEC("tc/load_balancer")
 int load_balancer_rr_v1(struct __sk_buff *skb) {
@@ -67,10 +107,6 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
         return TC_ACT_SHOT;
     if (eth->h_proto != bpf_htons(ETH_P_IP) && eth->h_proto != bpf_htons(ETH_P_IPV6))
         return TC_ACT_SHOT;
-
-#if DEBUG
-    bpf_printk("eth->h_proto: %s\n", eth->h_proto == bpf_htons(ETH_P_IP) ? "ETH_P_IP" : "ETH_P_IPV6");
-#endif
 
     ip = (struct iphdr *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
@@ -96,45 +132,31 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
         key.src_port = 0;
         key.dst_port = 0;
     } else {
-        // Other protocol
         return TC_ACT_SHOT; 
     }
 
-#if DEBUG
-    bpf_printk("src_ip: %u, dst_ip: %u, src_port: %u, dst_port: %u, protocol: %u\n", key.src_ip, key.dst_ip, key.src_port, key.dst_port, key.protocol);
-#endif
 
     __u32 hash = jhash(&key, sizeof(key), 0);
     bpf_printk("hash: %u\n", hash);
 
     // Check if hash is already in the eBPF map
-    __u32 *ifindex = bpf_map_lookup_elem(&flow_map, &hash);
-    if (!ifindex) {
-        // save the next ifindex to be used
-        int res;
-        __u32 *next_ifindex = bpf_map_lookup_elem(&backend_map, &idx);
-        if (!next_ifindex) {
-            bpf_printk("next_ifindex is NULL\n");
-            return TC_ACT_SHOT;
-        }
-        idx = (idx + 1) % MAX_BACKENDS;
-        res = bpf_map_update_elem(&flow_map, &hash, &next_ifindex, BPF_ANY);
-        if (res != 0) {
-            return TC_ACT_SHOT;
-        }
-  
-#if DEBUG
-        bpf_printk("the new flow is being attached to ifindex : %u\n", next_ifindex);
+    __u32 *destination_ip = bpf_map_lookup_elem(&flow_map, &hash);
 
-        bpf_printk("redirecting to ifindex: %u\n", next_ifindex);
-#endif
-        return bpf_redirect(*next_ifindex, 0);
-    } 
-#if DEBUG
-    bpf_printk("redirecting to ifindex: %u\n", *ifindex);
-#endif
-    return bpf_redirect(*ifindex, 0);
+    if(!destination_ip){
+        __u32 map_key = 0;
+        __u32 *num_backends_elem = bpf_map_lookup_elem(&num_backends, &map_key);
+        if(!num_backends_elem){
+            bpf_printk("accessing num_backends BPF map error.\n");
+            return TC_ACT_SHOT;
+        }
+        destination_ip = bpf_map_lookup_elem(&backends, &current_backend_index);
+        current_backend_index = (current_backend_index+1) % (*num_backends_elem);
+    }
+   
+    __u32 old_ip = ip->daddr;
+    bpf_l3_csum_replace(skb, offsetof(struct iphdr, check), old_ip, *destination_ip, 4);
+
+    return TC_ACT_OK;
 }
-
 
 char LICENSE[] SEC("license") = "GPL";

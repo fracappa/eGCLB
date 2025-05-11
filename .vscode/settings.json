@@ -8,6 +8,7 @@
         "string_view": "c",
         "system_error": "c",
         "text_encoding": "c",
-        "variant": "c"
+        "variant": "c",
+        "bpf_tracing.h": "c"
     }
 }

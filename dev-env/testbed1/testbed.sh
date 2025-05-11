@@ -2,7 +2,7 @@
 set -e
 
 # Clients
-CLIENTS=(client1 client2 client3 client4 client5)
+CLIENTS=(client1)
 SERVERS=(server1 server2 server3)
 LB="loadbalancer"
 
@@ -66,19 +66,11 @@ mount | grep -q "/sys/fs/bpf" || \
     mount -t bpf none /sys/fs/bpf || \
     mount -t bpffs bpffs /sys/fs/bpf
 
-
+#attach queue disc clsact to loadbalancer
 ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
-ip netns exec loadbalancer tc qdisc add dev veth-lb-client2 clsact
-ip netns exec loadbalancer tc qdisc add dev veth-lb-client3 clsact
-ip netns exec loadbalancer tc qdisc add dev veth-lb-client4 clsact
-ip netns exec loadbalancer tc qdisc add dev veth-lb-client5 clsact
-
-ip netns exec loadbalancer tc filter add dev veth-lb-client1 ingress bpf obj ../../src/lb_sticky_rr_v2_bpfel.o sec tc/load_balancer
-ip netns exec loadbalancer tc filter add dev veth-lb-client2 ingress bpf obj ../../src/lb_sticky_rr_v2_bpfel.o sec tc/load_balancer
-ip netns exec loadbalancer tc filter add dev veth-lb-client3 ingress bpf obj ../../src/lb_sticky_rr_v2_bpfel.o sec tc/load_balancer
-ip netns exec loadbalancer tc filter add dev veth-lb-client4 ingress bpf obj ../../src/lb_sticky_rr_v2_bpfel.o sec tc/load_balancer
-ip netns exec loadbalancer tc filter add dev veth-lb-client5 ingress bpf obj ../../src/lb_sticky_rr_v2_bpfel.o sec tc/load_balancer
-
+# ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
+export LOAD_BALANCER_TYPE="Sticky_RR_v1"
+ip netns exec loadbalancer ../../src/ebpf-go-lb veth-lb-client1 veth-lb-server1
 
 
 echo "✅ Network namespaces created and interfaces connected."
