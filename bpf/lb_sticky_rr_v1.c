@@ -29,7 +29,7 @@ struct flow_key {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32); // hash of flow_key
-    __type(value, __u32); // destination IP
+    __type(value, __u32); // backend ifindex
     __uint(max_entries, 10240);
 } flow_map SEC(".maps");
 
@@ -91,7 +91,7 @@ static __always_inline __u32 jhash(const void *key, __u32 len, __u32 initval) {
     return c;
 }
 
-__u32 current_backend_index;
+ __u32 current_backend_index;
 
 SEC("tc/load_balancer")
 int load_balancer_rr_v1(struct __sk_buff *skb) {
@@ -137,7 +137,7 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
 
 
     __u32 hash = jhash(&key, sizeof(key), 0);
-    bpf_printk("hash: %u\n", hash);
+    // bpf_printk("hash: %u\n", hash);
 
     // Check if hash is already in the eBPF map
     __u32 *destination_ip = bpf_map_lookup_elem(&flow_map, &hash);
@@ -150,7 +150,15 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
             return TC_ACT_SHOT;
         }
         destination_ip = bpf_map_lookup_elem(&backends, &current_backend_index);
+        if(!destination_ip) {
+            bpf_printk("accessing backends BPF map error.\n");
+            return TC_ACT_SHOT;
+        }
         current_backend_index = (current_backend_index+1) % (*num_backends_elem);
+        if(!bpf_map_update_elem(&flow_map, &hash, &destination_ip, BPF_ANY)) {
+            bpf_printk("updating flow_map BPF map error.\n");
+            return TC_ACT_SHOT;
+        }
     }
    
     __u32 old_ip = ip->daddr;

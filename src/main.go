@@ -32,6 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("lookup network iface %q: %s", ifaceName, err)
 	}
+	
 
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -40,6 +41,7 @@ func main() {
 
 	loadBalancerType := os.Getenv("LOAD_BALANCER_TYPE")
 	fmt.Println("Load Balancer Type: ", loadBalancerType)
+	runLoadBalancerV1(iface.Index)
 	switch loadBalancerType {
 	case "Sticky_RR_v1":
 		 runLoadBalancerV1(iface.Index)
@@ -104,7 +106,7 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 		log.Fatalf("loading lb_sticky_rr_v1 objects: %v", err)
 	}
 
-	if err := objs.lb_sticky_rr_v1Variables.CurrentBackendIndex.Set(0); err != nil {
+	if err := objs.lb_sticky_rr_v1Variables.CurrentBackendIndex.Set(uint32(0)); err != nil {
 		log.Fatalf("setting lb_v1Variables CurrentBackendIndex (Err: %v)", err)
 	}
 
@@ -115,11 +117,10 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 		if err != nil {
 			log.Fatalf("converting string to IP (Err: %v)", err)
 		}
-		if err := objs.lb_sticky_rr_v1Maps.Backends.Put(&i, ipValue); err != nil {
+		if err := objs.lb_sticky_rr_v1Maps.Backends.Put(uint32(i), uint32(ipValue)); err != nil {
 			log.Fatalf("setting lb_v1Maps.Backends (Err: %v)", err)
 		}
 	}
-	
 	
 	// Attach the program to Ingress TC.
 	l, err := link.AttachTCX(link.TCXOptions{
@@ -130,6 +131,8 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 	if err != nil {
 		log.Fatalf("could not attach TCx program: %s", err)
 	}
+
+	log.Println("attched TCX program on interface ", ifaceIndex)
 
 	return l
 

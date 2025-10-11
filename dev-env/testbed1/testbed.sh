@@ -66,12 +66,14 @@ mount | grep -q "/sys/fs/bpf" || \
     mount -t bpf none /sys/fs/bpf || \
     mount -t bpffs bpffs /sys/fs/bpf
 
-#attach queue disc clsact to loadbalancer
-ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
+# #attach queue disc clsact to loadbalancer
 # ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
-export LOAD_BALANCER_TYPE="Sticky_RR_v1"
-ip netns exec loadbalancer ../../src/ebpf-go-lb veth-lb-client1 veth-lb-server1
+# # ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
+# export LOAD_BALANCER_TYPE="Sticky_RR_v1"
+# ip netns exec loadbalancer ../src/ebpf-go-lb veth-lb-client1 veth-lb-server1
 
 
 echo "✅ Network namespaces created and interfaces connected."
 
+# sudo tc qdisc add dev veth0 clsact
+# sudo tc filter add dev veth0 ingress bpf obj lb_sticky_rr_v1_bpfel.o sec tc/load_balancer
