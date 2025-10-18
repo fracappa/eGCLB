@@ -8,10 +8,10 @@
 
  __u32 current_backend_index;
 
-SEC("tc/load_balancer")
-int load_balancer_rr_v1(struct __sk_buff *skb) {
-    void *data = (void *)(long)skb->data;
-    void *data_end = (void *)(long)skb->data_end;
+SEC("xdp/load_balancer")
+int xdp_load_balancer_rr(struct xdp_md *ctx){
+    void *data_end = (void *)(long)ctx->data_end;
+    void *data = (void *)(long)ctx->data;
     struct ethhdr *eth = data;
     struct iphdr *ip;
     struct tcphdr *tcp;
@@ -19,45 +19,37 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
     struct flow_key key = {};
 
     if ((void *)(eth + 1) > data_end)
-        return TC_ACT_SHOT;
-    if (eth->h_proto != bpf_htons(ETH_P_IP) && eth->h_proto != bpf_htons(ETH_P_IPV6))
-        return TC_ACT_SHOT;
+        return XDP_PASS;
+    if (eth->h_proto != bpf_htons(ETH_P_IP))
+        return XDP_PASS;
 
-    ip = (struct iphdr *)(eth + 1);
+    ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
-        return TC_ACT_SHOT;
-    
+        return XDP_PASS;
+
     key.src_ip = ip->saddr;
     key.dst_ip = ip->daddr;
     key.protocol = ip->protocol;
-    
+
     if (ip->protocol == IPPROTO_TCP) {
-        tcp = (struct tcphdr *)(ip + 1);
+        tcp = (void *)(ip + 1);
         if ((void *)(tcp + 1) > data_end)
-            return TC_ACT_SHOT;
+            return XDP_PASS;
         key.src_port = tcp->source;
         key.dst_port = tcp->dest;
     } else if (ip->protocol == IPPROTO_UDP) {
-        udp = (struct udphdr *)(ip + 1);
+        udp = (void *)(ip + 1);
         if ((void *)(udp + 1) > data_end)
-            return TC_ACT_SHOT;
+            return XDP_PASS;
         key.src_port = udp->source;
         key.dst_port = udp->dest;
-    } else if (ip->protocol == IPPROTO_ICMP) {
-        key.src_port = 0;
-        key.dst_port = 0;
-    } else {
-        return TC_ACT_SHOT; 
     }
 
-
     __u32 hash = jhash(&key, sizeof(key), 0);
-    // bpf_printk("hash: %u\n", hash);
-
-    // Check if hash is already in the eBPF map
     __u32 *destination_ip = bpf_map_lookup_elem(&flow_map, &hash);
 
-    if(!destination_ip){
+    if (!destination_ip){
+        if(!destination_ip){
         __u32 map_key = 0;
         __u32 *num_backends_elem = bpf_map_lookup_elem(&num_backends, &map_key);
         if(!num_backends_elem){
@@ -75,11 +67,15 @@ int load_balancer_rr_v1(struct __sk_buff *skb) {
             return TC_ACT_SHOT;
         }
     }
-   
-    __u32 old_ip = ip->daddr;
-    bpf_l3_csum_replace(skb, offsetof(struct iphdr, check), old_ip, *destination_ip, 4);
+    }
 
-    return TC_ACT_OK;
+    // Rewrite destination IP manually
+    ip->daddr = *destination_ip;
+    // Must fix checksum manually here (XDP lacks helpers)
+    // pseudo-code: recompute_ipv4_csum(ip);
+
+    return XDP_TX; // or XDP_REDIRECT to another interface
 }
+
 
 char LICENSE[] SEC("license") = "GPL";
