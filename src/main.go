@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 )
@@ -50,7 +49,8 @@ func main() {
 	// case "Sticky_RR_v3":
 	// 	runLoadBalancerV3()
 	default:
-		log.Fatalf("unknown load balancer type: %s", loadBalancerType)
+		runLoadBalancerV1(iface.Index)
+		// log.Fatalf("unknown load balancer type: %s", loadBalancerType)
 	}
 
 	// Handle Ctrl+C (SIGINT) to gracefully exit
@@ -122,17 +122,27 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 		}
 	}
 	
-	// Attach the program to Ingress TC.
-	l, err := link.AttachTCX(link.TCXOptions{
+	// // Attach the program to Ingress TC.
+	// l, err := link.AttachTCX(link.TCXOptions{
+	// 	Interface: ifaceIndex,
+	// 	Program:   objs.lb_sticky_rr_v1Programs.LoadBalancerRrV1,
+	// 	Attach:    ebpf.AttachTCXIngress,
+	// })
+	// Attach the program at XDP .
+	l, err := link.AttachXDP(link.XDPOptions{
 		Interface: ifaceIndex,
-		Program:   objs.lb_sticky_rr_v1Programs.LoadBalancerRrV1,
-		Attach:    ebpf.AttachTCXIngress,
-	})
-	if err != nil {
-		log.Fatalf("could not attach TCx program: %s", err)
-	}
+		Program: objs.lb_sticky_rr_v1Programs.XdpLoadBalancerRr,
+		},
+	)
 
-	log.Println("attched TCX program on interface ", ifaceIndex)
+	if err != nil {
+		log.Fatalf("could not attach XDP program: %s", err)
+	}
+	
+	defer l.Close() 
+
+
+	log.Println("attched XDP program on interface ", ifaceIndex)
 
 	return l
 
