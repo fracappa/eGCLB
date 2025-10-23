@@ -19,13 +19,13 @@ int xdp_load_balancer_rr(struct xdp_md *ctx){
     struct flow_key key = {};
 
     if ((void *)(eth + 1) > data_end)
-        return XDP_PASS;
+        return XDP_DROP;
     if (eth->h_proto != bpf_htons(ETH_P_IP))
-        return XDP_PASS;
+        return XDP_DROP;
 
     ip = (void *)(eth + 1);
     if ((void *)(ip + 1) > data_end)
-        return XDP_PASS;
+        return XDP_DROP;
 
     key.src_ip = ip->saddr;
     key.dst_ip = ip->daddr;
@@ -34,13 +34,13 @@ int xdp_load_balancer_rr(struct xdp_md *ctx){
     if (ip->protocol == IPPROTO_TCP) {
         tcp = (void *)(ip + 1);
         if ((void *)(tcp + 1) > data_end)
-            return XDP_PASS;
+            return XDP_DROP;
         key.src_port = tcp->source;
         key.dst_port = tcp->dest;
     } else if (ip->protocol == IPPROTO_UDP) {
         udp = (void *)(ip + 1);
         if ((void *)(udp + 1) > data_end)
-            return XDP_PASS;
+            return XDP_DROP;
         key.src_port = udp->source;
         key.dst_port = udp->dest;
     }
@@ -54,17 +54,17 @@ int xdp_load_balancer_rr(struct xdp_md *ctx){
         __u32 *num_backends_elem = bpf_map_lookup_elem(&num_backends, &map_key);
         if(!num_backends_elem){
             bpf_printk("accessing num_backends BPF map error.\n");
-            return TC_ACT_SHOT;
+            return XDP_DROP;
         }
         destination_ip = bpf_map_lookup_elem(&backends, &current_backend_index);
         if(!destination_ip) {
             bpf_printk("accessing backends BPF map error.\n");
-            return TC_ACT_SHOT;
+            return XDP_DROP;
         }
         current_backend_index = (current_backend_index+1) % (*num_backends_elem);
         if(!bpf_map_update_elem(&flow_map, &hash, &destination_ip, BPF_ANY)) {
             bpf_printk("updating flow_map BPF map error.\n");
-            return TC_ACT_SHOT;
+            return XDP_DROP;
         }
     }
     }
