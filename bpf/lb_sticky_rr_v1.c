@@ -7,6 +7,7 @@
 #include "include/network.h"
 
  __u32 current_backend_index;
+struct backend_info load_balancer_info;
 
 SEC("xdp/load_balancer")
 int xdp_load_balancer_rr(struct xdp_md *ctx){
@@ -46,34 +47,36 @@ int xdp_load_balancer_rr(struct xdp_md *ctx){
     }
 
     __u32 hash = jhash(&key, sizeof(key), 0);
-    __u32 *destination_ip = bpf_map_lookup_elem(&flow_map, &hash);
+    struct backend_info *backend_info = bpf_map_lookup_elem(&flow_map, &hash);
 
-    if (!destination_ip){
-        if(!destination_ip){
+    if(!backend_info){
         __u32 map_key = 0;
         __u32 *num_backends_elem = bpf_map_lookup_elem(&num_backends, &map_key);
         if(!num_backends_elem){
             bpf_printk("accessing num_backends BPF map error.\n");
             return XDP_DROP;
         }
-        destination_ip = bpf_map_lookup_elem(&backends, &current_backend_index);
-        if(!destination_ip) {
+        backend_info = bpf_map_lookup_elem(&backends, &current_backend_index);
+        if(!backend_info) {
             bpf_printk("accessing backends BPF map error.\n");
             return XDP_DROP;
         }
         current_backend_index = (current_backend_index+1) % (*num_backends_elem);
-        if(!bpf_map_update_elem(&flow_map, &hash, &destination_ip, BPF_ANY)) {
+        if(!bpf_map_update_elem(&flow_map, &hash, &backend_info, BPF_ANY)) {
             bpf_printk("updating flow_map BPF map error.\n");
             return XDP_DROP;
         }
     }
-    }
 
-    // Rewrite destination IP manually
-    ip->daddr = *destination_ip;
-    // Must fix checksum manually here (XDP lacks helpers)
-    // pseudo-code: recompute_ipv4_csum(ip);
 
+    ip->daddr = backend_info->ip;
+    __builtin_memcpy(eth->h_dest, backend_info->mac, ETH_ALEN);
+    ip->saddr = load_balancer_info.ip;
+    __builtin_memcpy(eth->h_source, backend_info->mac, ETH_ALEN);
+
+    ip->check = iph_csum(ip);
+
+    
     return XDP_TX; // or XDP_REDIRECT to another interface
 }
 

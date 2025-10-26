@@ -16,6 +16,11 @@ import (
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go lb_sticky_rr_v1 ../bpf/lb_sticky_rr_v1.c
 
+type BackendAddr struct {
+    IP  uint32   // 4 bytes
+    MAC [6]byte  // 6 bytes
+    Pad [3]byte  // explicit padding to reach 13 bytes total
+}
 
 
 
@@ -71,13 +76,6 @@ func main() {
 
 }
 
-func ipToInt(ipStr string) (uint32, error) {
-	ip := net.ParseIP(ipStr).To4()
-	if ip == nil {
-		return 0, fmt.Errorf("invalid IPv4 address")
-	}
-	return binary.BigEndian.Uint32(ip), nil
-}
 
 func readEBPFMap(done chan struct{}) {
 	// Periodically read the value from the counter map and log it.
@@ -108,13 +106,41 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 
 	// populate BPF map
 	ipAddresses := [3]string{"10.0.1.2", "10.0.2.2", "10.0.3.2"}
-	for i,ip := range ipAddresses {
-		ipValue, err := ipToInt(ip)
-		if err != nil {
-			log.Fatalf("converting string to IP (Err: %v)", err)
+	macAddresses := [3]string{
+		"11:22:33:44:55:66",
+		"77:99:99:AA:BB:CC",
+		"DD:FF:12:23:34:56",
+	}
+	for i,address := range ipAddresses {
+		ip := net.ParseIP(address)
+		if ip == nil {
+			log.Fatalf("invalid IP address: %s", address)
 		}
-		if err := objs.lb_sticky_rr_v1Maps.Backends.Put(uint32(i), uint32(ipValue)); err != nil {
-			log.Fatalf("setting lb_v1Maps.Backends (Err: %v)", err)
+
+		mac, err := net.ParseMAC(macAddresses[i])
+		if err != nil {
+			log.Fatalf("invalid MAC address: %s (%v)", macAddresses[i], err)
+		}
+
+		var backend BackendAddr
+
+		backend.IP = binary.BigEndian.Uint32(ip.To4())
+
+		// Detect and set family
+		// if ip.To4() != nil {
+		// 	backend.Family = uint8(unix.AF_INET)
+		// 	copy(backend.IP[:4], ip.To4())
+		// } else {
+		// 	backend.Family = uint8(unix.AF_INET6)
+		// 	copy(backend.IP[:16], ip.To16())
+		// }
+
+		// Copy MAC (net.HardwareAddr is already []byte)
+		copy(backend.MAC[:], mac)
+
+		// Finally, put into the BPF map
+		if err := objs.lb_sticky_rr_v1Maps.Backends.Put(uint32(i), backend); err != nil {
+			log.Fatalf("putting backend #%d failed: %v", i, err)
 		}
 	}
 	
