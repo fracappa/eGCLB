@@ -7,14 +7,14 @@
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32); // hash of flow_key
-    __type(value, __u32); // destination IP
+    __type(value, struct flow_key); // destination IP
     __uint(max_entries, 10240);
 } flow_map SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __type(key, __u32); // incremental index {0,1,2,...,n}
-    __type(value, __u32); // destination IP
+    __type(value, struct flow_key); // destination IP
     __uint(max_entries, 10240);
 } backends SEC(".maps");
 

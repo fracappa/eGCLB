@@ -11,4 +11,9 @@ struct flow_key {
     __u8   protocol;
 } __attribute__((packed));
 
+struct backend_info{
+    __be32 ip;
+    __u8 mac[6];
+}__attribute__((packed));
+
 #endif /* __TYPES_H */
