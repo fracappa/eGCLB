@@ -45,14 +45,15 @@ func main() {
 
 	loadBalancerType := os.Getenv("LOAD_BALANCER_TYPE")
 	fmt.Println("Load Balancer Type: ", loadBalancerType)
-	runLoadBalancerV1(iface.Index)
-	switch loadBalancerType {
-	case "Sticky_RR_v1":
-		 runLoadBalancerV1(iface.Index)
-	default:
-		// runLoadBalancerV1(iface.Index)
-		log.Fatalf("unknown load balancer type: %s", loadBalancerType)
-	}
+	link := runLoadBalancerV1(iface.Index)
+	defer link.Close()
+	// switch loadBalancerType {
+	// case "Sticky_RR_v1":
+	// 	 runLoadBalancerV1(iface.Index)
+	// default:
+	// 	// runLoadBalancerV1(iface.Index)
+	// 	log.Fatalf("unknown load balancer type: %s", loadBalancerType)
+	// }
 
 	// Handle Ctrl+C (SIGINT) to gracefully exit
 	sigs := make(chan os.Signal, 1)
@@ -88,7 +89,7 @@ func readEBPFMap(done chan struct{}) {
 			fmt.Println("Stopping reading from eBPF map.")
 			return // Exit the goroutine
 		case <-ticker.C:
-			log.Println("Reading from eBPF map...")
+			// log.Println("Reading from eBPF map...")
 		}
 	}
 }
@@ -104,20 +105,14 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 		log.Fatalf("setting lb_v1Variables CurrentBackendIndex (Err: %v)", err)
 	}
 
-	// populate BPF map
-	ipAddresses := [3]string{"10.0.1.2", "10.0.2.2", "10.0.3.2"}
-	macAddresses := [3]string{
-		"11:22:33:44:55:66",
-		"77:99:99:AA:BB:CC",
-		"DD:FF:12:23:34:56",
+	if err := objs.lb_sticky_rr_v1Maps.NumBackends.Put(uint32(0), uint32(3)); err != nil {
+		log.Fatalf("setting lb_v1Maps.NumBackends (Err: %v)", err)
 	}
-	for i,address := range ipAddresses {
-		ip := net.ParseIP(address)
-		if ip == nil {
-			log.Fatalf("invalid IP address: %s", address)
-		}
 
-		mac, err := net.ParseMAC(macAddresses[i])
+	// populate BPF map
+	ipAddresses := [3]string{"10.0.1.11", "10.0.1.12", "10.0.1.13"}
+	for i,ip := range ipAddresses {
+		ipValue, err := ipToInt(ip)
 		if err != nil {
 			log.Fatalf("invalid MAC address: %s (%v)", macAddresses[i], err)
 		}
@@ -160,9 +155,6 @@ func runLoadBalancerV1(ifaceIndex int) link.Link{
 	if err != nil {
 		log.Fatalf("could not attach XDP program: %s", err)
 	}
-
-	defer l.Close() 
-
 
 	log.Println("attched XDP program on interface ", ifaceIndex)
 

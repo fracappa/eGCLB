@@ -1,79 +1,76 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
-# Clients
-CLIENTS=(client1)
-SERVERS=(server1 server2 server3)
-LB="loadbalancer"
+### --- CLEANUP ---
+cleanup() {
+    echo "[*] Cleaning up old namespaces and bridges..."
+    for ns in client1 client2 client3 server1 server2 server3; do
+        ip netns del $ns 2>/dev/null || true
+    done
+    ip link del br-client 2>/dev/null || true
+    ip link del br-server 2>/dev/null || true
+}
+cleanup
 
-# IP prefixes
-CLIENT_NET="10.0.0."
-SERVER_NETS=("10.0.1." "10.0.2." "10.0.3.")
-
-# Create namespaces
-echo "Creating namespaces..."
-for ns in "${CLIENTS[@]}" "$LB" "${SERVERS[@]}"; do
-    ip netns add $ns
+### --- CREATE CLIENT & SERVER NAMESPACES ---
+echo "[+] Creating namespaces..."
+for i in 1 2 3; do
+    ip netns add client$i
+    ip netns add server$i
 done
 
-# Connect clients to loadbalancer
-for i in "${!CLIENTS[@]}"; do
-    cns="${CLIENTS[$i]}"
-    veth_c="veth-${cns}"
-    veth_lb="veth-lb-${cns}"
+### --- CREATE BRIDGES ON HOST (LB) ---
+echo "[+] Creating bridges on host..."
+ip link add br-client type bridge
+ip link add br-server type bridge
+ip addr add 10.0.0.1/24 dev br-client
+ip addr add 10.0.1.1/24 dev br-server
+ip link set br-client up
+ip link set br-server up
 
-    ip link add $veth_c type veth peer name $veth_lb
+### --- CONNECT CLIENTS TO br-client ---
+for i in 1 2 3; do
+    echo "[+] Connecting client$i..."
+    ip link add veth_c${i} type veth peer name veth_br_c${i}
+    ip link set veth_c${i} netns client$i
+    ip link set veth_br_c${i} master br-client
+    ip link set veth_br_c${i} up
 
-    ip link set $veth_c netns $cns
-    ip link set $veth_lb netns $LB
-
-    ip netns exec $cns ip addr add ${CLIENT_NET}$((i+1))/24 dev $veth_c
-    ip netns exec $cns ip link set $veth_c up
-    ip netns exec $cns ip route add default via ${CLIENT_NET}100
-
-    ip netns exec $LB ip addr add ${CLIENT_NET}100/24 dev $veth_lb
-    ip netns exec $LB ip link set $veth_lb up
+    ip netns exec client$i ip addr add 10.0.0.$((10 + i))/24 dev veth_c${i}
+    ip netns exec client$i ip link set veth_c${i} up
+    ip netns exec client$i ip link set lo up
+    ip netns exec client$i ip route add default via 10.0.0.1
 done
 
-# Connect servers to loadbalancer
-for i in "${!SERVERS[@]}"; do
-    sns="${SERVERS[$i]}"
-    net="${SERVER_NETS[$i]}"
-    veth_s="veth-${sns}"
-    veth_lb="veth-lb-${sns}"
+### --- CONNECT SERVERS TO br-server ---
+for i in 1 2 3; do
+    echo "[+] Connecting server$i..."
+    ip link add veth_s${i} type veth peer name veth_br_s${i}
+    ip link set veth_s${i} netns server$i
+    ip link set veth_br_s${i} master br-server
+    ip link set veth_br_s${i} up
 
-    ip link add $veth_s type veth peer name $veth_lb
-
-    ip link set $veth_s netns $sns
-    ip link set $veth_lb netns $LB
-
-    ip netns exec $sns ip addr add ${net}2/24 dev $veth_s
-    ip netns exec $sns ip link set $veth_s up
-    ip netns exec $sns ip route add default via ${net}1
-
-    ip netns exec $LB ip addr add ${net}1/24 dev $veth_lb
-    ip netns exec $LB ip link set $veth_lb up
+    ip netns exec server$i ip addr add 10.0.1.$((10 + i))/24 dev veth_s${i}
+    ip netns exec server$i ip link set veth_s${i} up
+    ip netns exec server$i ip link set lo up
+    ip netns exec server$i ip route add default via 10.0.1.1
 done
 
-# Loopback up in all namespaces
-for ns in "${CLIENTS[@]}" "$LB" "${SERVERS[@]}"; do
-    ip netns exec $ns ip link set lo up
-done
+### --- ENABLE FORWARDING ON HOST ---
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
-# Mount bpffs if needed
-mkdir -p /sys/fs/bpf
-mount | grep -q "/sys/fs/bpf" || \
-    mount -t bpf none /sys/fs/bpf || \
-    mount -t bpffs bpffs /sys/fs/bpf
+### --- OPTIONAL: NAT (clients → servers through host) ---
+# iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -d 10.0.1.0/24 -j MASQUERADE
 
-# #attach queue disc clsact to loadbalancer
-# ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
-# # ip netns exec loadbalancer tc qdisc add dev veth-lb-client1 clsact
-# export LOAD_BALANCER_TYPE="Sticky_RR_v1"
-# ip netns exec loadbalancer ../src/ebpf-go-lb veth-lb-client1 veth-lb-server1
-
-
-echo "✅ Network namespaces created and interfaces connected."
-
-# sudo tc qdisc add dev veth0 clsact
-# sudo tc filter add dev veth0 ingress bpf obj lb_sticky_rr_v1_bpfel.o sec tc/load_balancer
+echo
+echo "[+] Setup complete. Host acts as load balancer."
+echo
+echo "Test connectivity:"
+echo "  ip netns exec client1 ping -c2 10.0.0.1        # ping host (LB)"
+echo "  ip netns exec server1 ping -c2 10.0.1.1        # ping host (LB)"
+echo
+echo "To route traffic from clients to servers through host:"
+echo "  Enable NAT: iptables -t nat -A POSTROUTING -s 10.0.0.0/24 -d 10.0.1.0/24 -j MASQUERADE"
+echo
+echo "Or set up load balancing (e.g., round robin):"
+echo "  iptables -t nat -A PREROUTING -d 10.0.0.1 -p tcp --dport 80 -j DNAT --to-destination 10.0.1.11-10.0.1.13"
